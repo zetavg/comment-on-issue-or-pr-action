@@ -1,0 +1,84 @@
+name: Comment on Issue or PR
+description: Comment on an issue or pull request.
+branding:
+  icon: message-square
+  color: green
+
+inputs:
+  issue-or-pr-number:
+    type: number
+    required: true
+  content:
+    type: string
+    required: true
+  github-token:
+    type: string
+    required: false
+
+outputs:
+  comment-id:
+    description: The ID of the comment
+    value: ${{ steps.comment.outputs.id }}
+  comment-node-id:
+    description: The node ID of the comment
+    value: ${{ steps.comment.outputs.node_id }}
+  comment-api-url:
+    description: The URL of the comment
+    value: ${{ steps.comment.outputs.url }}
+  comment-html-url:
+    description: The HTML URL of the comment
+    value: ${{ steps.comment.outputs.html_url }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: comment
+      shell: bash
+      env:
+        GITHUB_API_URL: ${{ github.api_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        ISSUE_OR_PR_NUMBER: ${{ inputs.issue-or-pr-number }}
+        CONTENT: ${{ inputs.content }}
+        GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
+      run: |
+        content="$(echo -e "$CONTENT" | sed 's/[[:space:]]*$//')"
+        echo "Commenting on #$ISSUE_OR_PR_NUMBER with:"
+        echo '----------------------------------------------------------------'
+        echo "$content"
+        echo '----------------------------------------------------------------'
+
+        response="$(
+          curl -L --silent \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/issues/$ISSUE_OR_PR_NUMBER/comments" \
+            -d "{\"body\":$(echo -e "$content" | jq -Rs)}"
+        )"
+
+        id="$(echo "$response" | jq -r '.id')"
+
+        if [ -z "$id" ] || [ "$id" = 'null' ]; then
+          error_message="$(echo "$response" | jq -r '.message')"
+          echo "::error::Failed to comment on #$ISSUE_OR_PR_NUMBER: $error_message"
+          echo "$response" | jq .
+
+          if [ "$error_message" = 'Resource not accessible by integration' ]; then
+            echo 'Please make sure that you have the "issues: write" and/or "pull-requests: write" permission for the repository (See: https://docs.github.com/en/actions/using-jobs/assigning-permissions-to-jobs#setting-the-github_token-permissions-for-a-specific-job), or if you have specified a custom access token, make sure it has the correct scope.'
+          fi
+
+          exit 1
+
+        else
+          node_id="$(echo "$response" | jq -r '.node_id')"
+          url="$(echo "$response" | jq -r '.url')"
+          html_url="$(echo "$response" | jq -r '.html_url')"
+
+          echo "Commented on #$ISSUE_OR_PR_NUMBER: $html_url"
+
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "node_id=$node_id" >> "$GITHUB_OUTPUT"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "html_url=$html_url" >> "$GITHUB_OUTPUT"
+        fi
